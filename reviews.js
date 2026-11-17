@@ -4,6 +4,11 @@ const config = window.NAILSDOKUMA_SUPABASE_CONFIG || {};
 const ready = Boolean(config.url && config.publishableKey);
 const supabase = ready ? createClient(config.url, config.publishableKey) : null;
 const list = document.getElementById('review-list');
+const carouselControls = document.getElementById('review-controls');
+const previousButton = document.getElementById('review-prev');
+const nextButton = document.getElementById('review-next');
+const carouselPosition = document.getElementById('review-position');
+let approvedCount = 0;
 const formPanel = document.getElementById('review-form-panel');
 const form = document.getElementById('review-form');
 const feedback = document.getElementById('review-feedback');
@@ -25,7 +30,7 @@ const copy = {
     success: 'Teşekkürler! Yorumunuz gönderildi ve yayınlanmadan önce onay bekliyor.',
     submit: 'Gönderiliyor…', stars: 'yıldız',
     errorSubmit: 'Yorum gönderilemedi. Lütfen alanları kontrol edip tekrar deneyin.',
-    date: 'tr-TR'
+    date: 'tr-TR', previous: 'Önceki yorumlar', next: 'Sonraki yorumlar', range: (start, end, total) => `Gösterilen ${start}-${end} / ${total}`
   },
   ua: {
     config: 'Форма відгуків ще не налаштована. Спробуйте, будь ласка, пізніше.',
@@ -37,7 +42,7 @@ const copy = {
     success: 'Дякуємо! Відгук надіслано, він з’явиться після схвалення.',
     submit: 'Надсилаємо…', stars: 'зірок',
     errorSubmit: 'Не вдалося надіслати відгук. Перевірте поля й спробуйте ще раз.',
-    date: 'uk-UA'
+    date: 'uk-UA', previous: 'Попередні відгуки', next: 'Наступні відгуки', range: (start, end, total) => `Показано ${start}-${end} із ${total}`
   }
 };
 const t = () => copy[language];
@@ -50,9 +55,34 @@ function setLanguage(next) {
   language = next === 'ua' ? 'ua' : 'tr';
   nameInput.placeholder = language === 'tr' ? nameInput.dataset.placeholderTr : nameInput.dataset.placeholderUa;
   textInput.placeholder = language === 'tr' ? textInput.dataset.placeholderTr : textInput.dataset.placeholderUa;
+  list.setAttribute('aria-label', language === 'tr' ? 'Müşteri yorumları' : 'Відгуки клієнток');
+  previousButton.setAttribute('aria-label', t().previous);
+  nextButton.setAttribute('aria-label', t().next);
   renderReviews();
 }
 window.addEventListener('nailsdokuma:languagechange', event => setLanguage(event.detail?.language));
+
+function visibleReviewCount() {
+  if (window.matchMedia('(max-width: 560px)').matches) return 1;
+  if (window.matchMedia('(max-width: 820px)').matches) return 2;
+  return 3;
+}
+function updateCarouselControls() {
+  const canScroll = approvedCount > visibleReviewCount();
+  carouselControls.hidden = !canScroll;
+  if (!canScroll) return;
+  const card = list.querySelector('.review-card');
+  const step = card ? card.getBoundingClientRect().width + parseFloat(getComputedStyle(list).columnGap || '0') : list.clientWidth;
+  const first = step ? Math.round(list.scrollLeft / step) : 0;
+  const shown = visibleReviewCount();
+  carouselPosition.textContent = t().range(Math.min(first + 1, approvedCount), Math.min(first + shown, approvedCount), approvedCount);
+  previousButton.disabled = list.scrollLeft <= 2;
+  nextButton.disabled = list.scrollLeft + list.clientWidth >= list.scrollWidth - 2;
+}
+list.addEventListener('scroll', () => requestAnimationFrame(updateCarouselControls), { passive: true });
+previousButton.addEventListener('click', () => list.scrollBy({ left: -list.clientWidth, behavior: 'smooth' }));
+nextButton.addEventListener('click', () => list.scrollBy({ left: list.clientWidth, behavior: 'smooth' }));
+window.addEventListener('resize', updateCarouselControls);
 
 function renderCard(review) {
   const article = document.createElement('article');
@@ -75,37 +105,50 @@ function renderCard(review) {
   return article;
 }
 async function renderReviews() {
+  list.classList.remove('is-message');
   list.replaceChildren();
   if (!ready) {
     const message = document.createElement('p');
     message.className = 'review-state';
     message.textContent = t().config;
+    approvedCount = 0;
+    carouselControls.hidden = true;
     list.append(message);
     return;
   }
   const loading = document.createElement('p');
   loading.className = 'review-state';
   loading.textContent = t().loading;
+  list.classList.add('is-message');
   list.append(loading);
   const { data, error } = await supabase.from('reviews')
     .select('id, customer_name, rating, review_text, created_at')
-    .eq('status', 'approved').order('created_at', { ascending: false }).limit(12);
+    .eq('status', 'approved').order('created_at', { ascending: false });
   list.replaceChildren();
+  list.classList.remove('is-message');
   if (error) {
+    approvedCount = 0;
+    carouselControls.hidden = true;
     const message = document.createElement('p');
     message.className = 'review-state';
     message.textContent = t().error;
+    list.classList.add('is-message');
     list.append(message);
     return;
   }
   if (!data?.length) {
+    approvedCount = 0;
+    carouselControls.hidden = true;
     const message = document.createElement('p');
     message.className = 'review-state';
     message.textContent = t().empty;
+    list.classList.add('is-message');
     list.append(message);
     return;
   }
+  approvedCount = data.length;
   data.forEach(review => list.append(renderCard(review)));
+  requestAnimationFrame(updateCarouselControls);
 }
 
 openButton.addEventListener('click', () => {
